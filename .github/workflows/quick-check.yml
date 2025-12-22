@@ -1,0 +1,29 @@
+name: Quick Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  quick-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linting tools
+        run: |
+          pip install black flake8 isort
+
+      - name: Check formatting with Black
+        run: black --check src/ tests/
+
+      - name: Check imports with isort
+        run: isort --check-only src/ tests/
+
+      - name: Lint with flake8
+        run: flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source
