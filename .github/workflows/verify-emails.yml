@@ -36,6 +36,9 @@ jobs:
           import json
           import time
           import random
+          import urllib.request
+          import urllib.parse
+          import re
           from typing import Optional, List, Tuple
           from datetime import datetime
 
@@ -127,6 +130,49 @@ jobs:
               'icloud.com', 'me.com', 'mac.com', 'aol.com',
               'protonmail.com', 'proton.me',
           }
+
+          def search_github_for_email(first_name: str, last_name: str, domain: str) -> Optional[str]:
+              """Search GitHub commits for email addresses matching name + domain."""
+              if not first_name or not last_name or not domain:
+                  return None
+
+              variants = [first_name.lower()]
+              if first_name.lower() in NICKNAME_MAP:
+                  variants.extend(NICKNAME_MAP[first_name.lower()])
+              # Also check reverse (if they use nickname, find full name)
+              for full, nicks in NICKNAME_MAP.items():
+                  if first_name.lower() in nicks:
+                      variants.append(full)
+
+              for variant in variants[:5]:  # Limit searches
+                  # Search GitHub API for commits with this email pattern
+                  query = f"{variant} {last_name} {domain}"
+                  url = f"https://api.github.com/search/commits?q=author-email:{domain}+author-name:{variant}+{last_name}&per_page=5"
+                  headers = {
+                      'Accept': 'application/vnd.github.cloak-preview+json',
+                      'User-Agent': 'EmailVerifier/1.0'
+                  }
+                  try:
+                      req = urllib.request.Request(url, headers=headers)
+                      with urllib.request.urlopen(req, timeout=10) as resp:
+                          data = json.loads(resp.read().decode())
+                          if data.get('total_count', 0) > 0:
+                              for item in data.get('items', []):
+                                  commit = item.get('commit', {})
+                                  author = commit.get('author', {})
+                                  email = author.get('email', '')
+                                  if email and domain in email.lower():
+                                      # Validate email matches expected patterns
+                                      local = email.split('@')[0].lower()
+                                      if variant in local or last_name.lower() in local:
+                                          print(f"  [GITHUB] Found: {email}")
+                                          return email
+                  except Exception as e:
+                      print(f"  [GITHUB] Search error for {variant}: {e}")
+                      continue
+                  time.sleep(0.5)  # Rate limit
+
+              return None
 
           def get_name_variants(first_name: str) -> List[str]:
               if not first_name:
@@ -255,10 +301,27 @@ jobs:
               if not domain:
                   return {**row, 'email': '', 'status': 'no_domain', 'confidence': 'low'}
 
+              # Step 1: Try GitHub search first (finds REAL emails)
+              print(f"  [STEP 1] Searching GitHub for {first_name} {last_name} @ {domain}...")
+              github_email = search_github_for_email(first_name, last_name, domain)
+              if github_email:
+                  return {
+                      **row,
+                      'email': github_email,
+                      'domain': domain,
+                      'status': 'github_found',
+                      'message': 'Found in GitHub commits',
+                      'confidence': 'high',
+                      'patterns_tried': 0
+                  }
+
+              # Step 2: Generate patterns for SMTP verification
               patterns = generate_patterns(first_name, last_name, domain)
               if not patterns:
                   return {**row, 'email': '', 'status': 'no_patterns', 'confidence': 'low'}
 
+              # Step 3: SMTP verification (works for non-catch-all domains)
+              print(f"  [STEP 2] SMTP verification...")
               email, status, message = verify_patterns(patterns, domain)
 
               confidence = 'high' if status == 'verified' else ('medium' if status == 'catchall' else 'low')
