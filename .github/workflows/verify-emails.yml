@@ -291,35 +291,44 @@ jobs:
               except:
                   return None
 
-          def check_catchall(domain: str, mx_host: str) -> bool:
+          def check_catchall(domain: str, mx_host: str) -> Tuple[bool, bool]:
+              """Returns (is_catchall, could_connect)"""
               random_email = f"nonexistent{random.randint(10000,99999)}@{domain}"
               try:
                   smtp = smtplib.SMTP(timeout=10)
                   smtp.connect(mx_host, 25)
-                  smtp.ehlo('gmail.com')  # Use a real domain
-                  mail_code, _ = smtp.mail('noreply@gmail.com')
+                  smtp.ehlo('mail.verification.test')
+                  # Try null sender first (RFC 5321 compliant for verification)
+                  mail_code, _ = smtp.mail('')
                   if mail_code != 250:
-                      print(f"  [DEBUG] Catch-all MAIL FROM failed: {mail_code}")
+                      # Try postmaster which servers should accept
+                      smtp.rset()
+                      mail_code, _ = smtp.mail(f'postmaster@{domain}')
+                  if mail_code != 250:
+                      print(f"  [DEBUG] Catch-all MAIL FROM rejected - server blocks verification")
                       smtp.quit()
-                      return False
+                      return False, False  # Can't determine, server blocks
                   code, _ = smtp.rcpt(random_email)
                   smtp.quit()
                   print(f"  [DEBUG] Catch-all test ({random_email}) -> code {code}")
-                  return code == 250
+                  return code == 250, True
               except Exception as e:
                   print(f"  [DEBUG] Catch-all test error: {e}")
-                  return False
+                  return False, False
 
           def verify_email(email: str, mx_host: str) -> Tuple[bool, int, str]:
               try:
                   smtp = smtplib.SMTP(timeout=10)
                   smtp.connect(mx_host, 25)
-                  smtp.ehlo('gmail.com')  # Use a real domain for EHLO
-                  # Use a realistic sender address
-                  mail_code, mail_msg = smtp.mail('noreply@gmail.com')
+                  smtp.ehlo('mail.verification.test')
+                  # Try null sender (RFC 5321 for bounce/verification)
+                  mail_code, mail_msg = smtp.mail('')
+                  if mail_code != 250:
+                      smtp.rset()
+                      mail_code, mail_msg = smtp.mail(f'postmaster@{email.split("@")[1]}')
                   if mail_code != 250:
                       smtp.quit()
-                      return False, mail_code, f'MAIL failed: {mail_msg}'
+                      return False, mail_code, f'MAIL rejected (server blocks verification)'
                   code, msg = smtp.rcpt(email)
                   smtp.quit()
                   msg_str = msg.decode() if isinstance(msg, bytes) else str(msg)
@@ -341,8 +350,13 @@ jobs:
 
               # Check if catch-all
               print(f"  [DEBUG] Testing catch-all...")
-              is_catchall = check_catchall(domain, mx_host)
-              print(f"  [DEBUG] Catch-all result: {is_catchall}")
+              is_catchall, could_connect = check_catchall(domain, mx_host)
+              print(f"  [DEBUG] Catch-all result: {is_catchall}, could_connect: {could_connect}")
+
+              if not could_connect:
+                  # Server blocks verification - return best pattern with medium confidence
+                  return patterns[0] if patterns else None, 'unverifiable', 'Server blocks SMTP verification'
+
               if is_catchall:
                   return patterns[0] if patterns else None, 'catchall', 'Domain accepts all emails'
 
@@ -407,7 +421,7 @@ jobs:
               print(f"  [STEP 2] SMTP verification...")
               email, status, message = verify_patterns(patterns, domain)
 
-              confidence = 'high' if status == 'verified' else ('medium' if status == 'catchall' else 'low')
+              confidence = 'high' if status == 'verified' else ('medium' if status in ['catchall', 'unverifiable'] else 'low')
 
               return {
                   **row,
