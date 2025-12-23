@@ -193,8 +193,10 @@ jobs:
                   smtp.mail('verify@emailverifier.app')
                   code, _ = smtp.rcpt(random_email)
                   smtp.quit()
+                  print(f"  [DEBUG] Catch-all test ({random_email}) -> code {code}")
                   return code == 250
-              except:
+              except Exception as e:
+                  print(f"  [DEBUG] Catch-all test error: {e}")
                   return False
 
           def verify_email(email: str, mx_host: str) -> Tuple[bool, int, str]:
@@ -211,24 +213,37 @@ jobs:
                   return False, 0, str(e)
 
           def verify_patterns(patterns: List[str], domain: str) -> Tuple[Optional[str], str, str]:
+              print(f"  [DEBUG] Patterns to test: {patterns[:5]}...")
+
               if domain.lower() in CATCHALL_DOMAINS:
+                  print(f"  [DEBUG] Known catch-all domain")
                   return patterns[0] if patterns else None, 'catchall', 'Known catch-all domain'
 
               mx_host = get_mx_host(domain)
+              print(f"  [DEBUG] MX host for {domain}: {mx_host}")
               if not mx_host:
                   return patterns[0] if patterns else None, 'no_mx', 'No MX record found'
 
               # Check if catch-all
-              if check_catchall(domain, mx_host):
+              print(f"  [DEBUG] Testing catch-all...")
+              is_catchall = check_catchall(domain, mx_host)
+              print(f"  [DEBUG] Catch-all result: {is_catchall}")
+              if is_catchall:
                   return patterns[0] if patterns else None, 'catchall', 'Domain accepts all emails'
 
               # Test each pattern
-              for pattern in patterns:
+              print(f"  [DEBUG] Testing {len(patterns)} patterns via SMTP...")
+              tested_results = []
+              for i, pattern in enumerate(patterns):
                   time.sleep(0.3)  # Rate limit
                   valid, code, msg = verify_email(pattern, mx_host)
+                  tested_results.append((pattern, code, msg[:50] if msg else ''))
+                  print(f"  [DEBUG] {i+1}. {pattern} -> {code} {'VALID!' if valid else msg[:40]}")
                   if valid:
                       return pattern, 'verified', f'SMTP verified (code {code})'
 
+              # Log all results for debugging
+              print(f"  [DEBUG] All {len(tested_results)} patterns failed verification")
               return patterns[0] if patterns else None, 'unverified', 'No pattern verified'
 
           def process_contact(row: dict) -> dict:
