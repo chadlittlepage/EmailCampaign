@@ -1,0 +1,308 @@
+name: Verify Emails
+
+on:
+  workflow_dispatch:
+    inputs:
+      csv_url:
+        description: 'URL to CSV file (or leave empty to use repo file)'
+        required: false
+        default: ''
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install dnspython aiohttp
+
+      - name: Run email verification
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import smtplib
+          import socket
+          import dns.resolver
+          import csv
+          import json
+          import time
+          import random
+          from typing import Optional, List, Tuple
+          from datetime import datetime
+
+          # Nickname mappings
+          NICKNAME_MAP = {
+              'thomas': ['tom', 'tommy', 'thom'],
+              'william': ['will', 'bill', 'billy', 'liam'],
+              'robert': ['rob', 'bob', 'bobby', 'bert'],
+              'michael': ['mike', 'mick', 'mikey'],
+              'richard': ['rick', 'rich', 'dick', 'ricky'],
+              'james': ['jim', 'jimmy', 'jamie'],
+              'david': ['dave', 'davey'],
+              'christopher': ['chris', 'topher', 'kit'],
+              'daniel': ['dan', 'danny'],
+              'matthew': ['matt', 'matty'],
+              'anthony': ['tony', 'ant'],
+              'joseph': ['joe', 'joey'],
+              'charles': ['charlie', 'chuck', 'chas'],
+              'steven': ['steve', 'stevie'],
+              'stephen': ['steve', 'stevie'],
+              'edward': ['ed', 'eddie', 'ted', 'teddy'],
+              'andrew': ['andy', 'drew'],
+              'benjamin': ['ben', 'benny', 'benji'],
+              'nicholas': ['nick', 'nicky'],
+              'timothy': ['tim', 'timmy'],
+              'jonathan': ['jon', 'johnny'],
+              'katherine': ['kate', 'kathy', 'katie', 'kat'],
+              'elizabeth': ['liz', 'beth', 'betty', 'eliza'],
+              'jennifer': ['jen', 'jenny', 'jenn'],
+              'margaret': ['maggie', 'meg', 'peggy'],
+              'patricia': ['pat', 'patty', 'trish'],
+              'susan': ['sue', 'susie', 'suzy'],
+              'jessica': ['jess', 'jessie'],
+              'samantha': ['sam', 'sammy'],
+              'alexander': ['alex', 'xander'],
+              'alexandra': ['alex', 'lexi', 'ali'],
+              'zachary': ['zach', 'zack'],
+              'nathan': ['nate'],
+              'jacob': ['jake'],
+              'joshua': ['josh'],
+              'gregory': ['greg'],
+              'phillip': ['phil'],
+              'lawrence': ['larry'],
+              'donald': ['don', 'donny'],
+              'gerald': ['gerry', 'jerry'],
+              'patrick': ['pat', 'paddy'],
+              'samuel': ['sam', 'sammy'],
+              'ronald': ['ron', 'ronny'],
+              'douglas': ['doug'],
+              'kenneth': ['ken', 'kenny'],
+              'raymond': ['ray'],
+              'rebecca': ['becky', 'becca'],
+              'catherine': ['cathy', 'cat', 'kate'],
+              'melissa': ['mel', 'missy'],
+              'amanda': ['mandy'],
+              'theodore': ['ted', 'teddy', 'theo'],
+              'frederick': ['fred', 'freddy', 'rick'],
+              'maximilian': ['max'],
+              'nathaniel': ['nate', 'nat'],
+          }
+
+          # Known company domains
+          KNOWN_DOMAINS = {
+              'dolby': 'dolby.com',
+              'dolby laboratories': 'dolby.com',
+              'google': 'google.com',
+              'microsoft': 'microsoft.com',
+              'apple': 'apple.com',
+              'amazon': 'amazon.com',
+              'meta': 'meta.com',
+              'facebook': 'fb.com',
+              'netflix': 'netflix.com',
+              'salesforce': 'salesforce.com',
+              'adobe': 'adobe.com',
+              'spotify': 'spotify.com',
+              'uber': 'uber.com',
+              'airbnb': 'airbnb.com',
+              'stripe': 'stripe.com',
+              'slack': 'slack.com',
+              'dropbox': 'dropbox.com',
+              'linkedin': 'linkedin.com',
+              'paypal': 'paypal.com',
+              'shopify': 'shopify.com',
+          }
+
+          CATCHALL_DOMAINS = {
+              'gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk',
+              'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+              'icloud.com', 'me.com', 'mac.com', 'aol.com',
+              'protonmail.com', 'proton.me',
+          }
+
+          def get_name_variants(first_name: str) -> List[str]:
+              if not first_name:
+                  return []
+              name = first_name.lower().strip()
+              variants = [name]
+              if name in NICKNAME_MAP:
+                  variants.extend(NICKNAME_MAP[name])
+              for full, nicks in NICKNAME_MAP.items():
+                  if name in nicks and full not in variants:
+                      variants.append(full)
+              if name:
+                  variants.append(name[0])
+              return list(dict.fromkeys(variants))
+
+          def generate_patterns(first_name: str, last_name: str, domain: str) -> List[str]:
+              if not first_name or not last_name or not domain:
+                  return []
+              variants = get_name_variants(first_name)
+              last = last_name.lower().strip()
+              patterns = []
+              for first in variants[:5]:  # Limit variants
+                  patterns.extend([
+                      f"{first}.{last}@{domain}",
+                      f"{first}{last}@{domain}",
+                      f"{first[0]}{last}@{domain}",
+                      f"{first[0]}.{last}@{domain}",
+                      f"{first}_{last}@{domain}",
+                      f"{last}.{first}@{domain}",
+                      f"{last}{first[0]}@{domain}",
+                  ])
+              return list(dict.fromkeys(patterns))[:20]
+
+          def guess_domain(company: str) -> Optional[str]:
+              if not company:
+                  return None
+              company_lower = company.lower().strip()
+              if company_lower in KNOWN_DOMAINS:
+                  return KNOWN_DOMAINS[company_lower]
+              domain = company_lower
+              for suffix in ['inc', 'llc', 'ltd', 'corp', 'co', 'company', 'corporation', 'group', 'holdings', 'technologies', 'labs', 'laboratories']:
+                  domain = domain.replace(f' {suffix}', '').replace(f' {suffix}.', '')
+              domain = ''.join(c for c in domain if c.isalnum())
+              return f"{domain}.com" if len(domain) >= 2 else None
+
+          def get_mx_host(domain: str) -> Optional[str]:
+              try:
+                  resolver = dns.resolver.Resolver()
+                  resolver.timeout = 5
+                  resolver.lifetime = 5
+                  resolver.nameservers = ['8.8.8.8', '1.1.1.1']
+                  answers = resolver.resolve(domain, 'MX')
+                  mx_records = sorted(answers, key=lambda x: x.preference)
+                  return str(mx_records[0].exchange).rstrip('.')
+              except:
+                  return None
+
+          def check_catchall(domain: str, mx_host: str) -> bool:
+              random_email = f"nonexistent{random.randint(10000,99999)}@{domain}"
+              try:
+                  smtp = smtplib.SMTP(timeout=10)
+                  smtp.connect(mx_host, 25)
+                  smtp.helo('emailverifier.app')
+                  smtp.mail('verify@emailverifier.app')
+                  code, _ = smtp.rcpt(random_email)
+                  smtp.quit()
+                  return code == 250
+              except:
+                  return False
+
+          def verify_email(email: str, mx_host: str) -> Tuple[bool, int, str]:
+              try:
+                  smtp = smtplib.SMTP(timeout=10)
+                  smtp.connect(mx_host, 25)
+                  smtp.helo('emailverifier.app')
+                  smtp.mail('verify@emailverifier.app')
+                  code, msg = smtp.rcpt(email)
+                  smtp.quit()
+                  msg_str = msg.decode() if isinstance(msg, bytes) else str(msg)
+                  return code == 250, code, msg_str
+              except Exception as e:
+                  return False, 0, str(e)
+
+          def verify_patterns(patterns: List[str], domain: str) -> Tuple[Optional[str], str, str]:
+              if domain.lower() in CATCHALL_DOMAINS:
+                  return patterns[0] if patterns else None, 'catchall', 'Known catch-all domain'
+
+              mx_host = get_mx_host(domain)
+              if not mx_host:
+                  return patterns[0] if patterns else None, 'no_mx', 'No MX record found'
+
+              # Check if catch-all
+              if check_catchall(domain, mx_host):
+                  return patterns[0] if patterns else None, 'catchall', 'Domain accepts all emails'
+
+              # Test each pattern
+              for pattern in patterns:
+                  time.sleep(0.3)  # Rate limit
+                  valid, code, msg = verify_email(pattern, mx_host)
+                  if valid:
+                      return pattern, 'verified', f'SMTP verified (code {code})'
+
+              return patterns[0] if patterns else None, 'unverified', 'No pattern verified'
+
+          def process_contact(row: dict) -> dict:
+              first_name = row.get('First Name', row.get('first_name', ''))
+              last_name = row.get('Last Name', row.get('last_name', ''))
+              company = row.get('Company', row.get('company', ''))
+
+              domain = guess_domain(company)
+              if not domain:
+                  return {**row, 'email': '', 'status': 'no_domain', 'confidence': 'low'}
+
+              patterns = generate_patterns(first_name, last_name, domain)
+              if not patterns:
+                  return {**row, 'email': '', 'status': 'no_patterns', 'confidence': 'low'}
+
+              email, status, message = verify_patterns(patterns, domain)
+
+              confidence = 'high' if status == 'verified' else ('medium' if status == 'catchall' else 'low')
+
+              return {
+                  **row,
+                  'email': email or '',
+                  'domain': domain,
+                  'status': status,
+                  'message': message,
+                  'confidence': confidence,
+                  'patterns_tried': len(patterns)
+              }
+
+          # Main execution
+          print(f"Starting email verification at {datetime.now()}")
+
+          # Read input CSV
+          input_file = 'input.csv'
+          output_file = 'verified_emails.csv'
+
+          try:
+              with open(input_file, 'r') as f:
+                  reader = csv.DictReader(f)
+                  contacts = list(reader)
+          except FileNotFoundError:
+              print("No input.csv found. Creating sample...")
+              contacts = [
+                  {'First Name': 'Thomas', 'Last Name': 'Graham', 'Company': 'Dolby'},
+              ]
+
+          print(f"Processing {len(contacts)} contacts...")
+
+          results = []
+          for i, contact in enumerate(contacts):
+              print(f"[{i+1}/{len(contacts)}] {contact.get('First Name', '')} {contact.get('Last Name', '')} @ {contact.get('Company', '')}")
+              result = process_contact(contact)
+              results.append(result)
+              print(f"  -> {result.get('email', 'N/A')} ({result.get('confidence', 'N/A')})")
+
+          # Write output
+          if results:
+              fieldnames = list(results[0].keys())
+              with open(output_file, 'w', newline='') as f:
+                  writer = csv.DictWriter(f, fieldnames=fieldnames)
+                  writer.writeheader()
+                  writer.writerows(results)
+
+          # Summary
+          verified = sum(1 for r in results if r.get('confidence') == 'high')
+          found = sum(1 for r in results if r.get('email'))
+          print(f"\nComplete! {found} emails found, {verified} verified")
+          print(f"Results saved to {output_file}")
+
+          PYTHON_SCRIPT
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-emails
+          path: verified_emails.csv
+          retention-days: 30
