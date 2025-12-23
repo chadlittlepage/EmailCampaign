@@ -194,6 +194,47 @@ jobs:
 
               return None
 
+          def search_company_website(first_name: str, last_name: str, domain: str) -> Optional[str]:
+              """Search company website team/about pages for email."""
+              if not domain:
+                  return None
+
+              variants = [first_name.lower()]
+              if first_name.lower() in NICKNAME_MAP:
+                  variants.extend(NICKNAME_MAP[first_name.lower()])
+
+              # Common team page URLs
+              pages = [
+                  f"https://{domain}/about",
+                  f"https://{domain}/team",
+                  f"https://{domain}/about-us",
+                  f"https://{domain}/contact",
+                  f"https://www.{domain}/about",
+                  f"https://www.{domain}/team",
+              ]
+
+              email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@' + re.escape(domain), re.IGNORECASE)
+
+              for page_url in pages[:4]:  # Limit requests
+                  try:
+                      req = urllib.request.Request(page_url, headers={
+                          'User-Agent': 'Mozilla/5.0 (compatible; EmailVerifier/1.0)'
+                      })
+                      with urllib.request.urlopen(req, timeout=5) as resp:
+                          content = resp.read().decode('utf-8', errors='ignore')
+                          emails = email_pattern.findall(content)
+                          for email in emails:
+                              local = email.split('@')[0].lower()
+                              for variant in variants:
+                                  if variant in local and last_name.lower() in local:
+                                      print(f"  [WEB] Found: {email}")
+                                      return email
+                  except:
+                      pass
+                  time.sleep(0.2)
+
+              return None
+
           def get_name_variants(first_name: str) -> List[str]:
               if not first_name:
                   return []
@@ -338,7 +379,21 @@ jobs:
                       'email': github_email,
                       'domain': domain,
                       'status': 'github_found',
-                      'message': 'Found in GitHub commits',
+                      'message': 'Found in GitHub',
+                      'confidence': 'high',
+                      'patterns_tried': 0
+                  }
+
+              # Step 1b: Try company website search
+              print(f"  [STEP 1b] Searching company website...")
+              web_email = search_company_website(first_name, last_name, domain)
+              if web_email:
+                  return {
+                      **row,
+                      'email': web_email,
+                      'domain': domain,
+                      'status': 'web_found',
+                      'message': 'Found on company website',
                       'confidence': 'high',
                       'patterns_tried': 0
                   }
