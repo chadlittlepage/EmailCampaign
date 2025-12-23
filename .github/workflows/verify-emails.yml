@@ -235,8 +235,12 @@ jobs:
               try:
                   smtp = smtplib.SMTP(timeout=10)
                   smtp.connect(mx_host, 25)
-                  smtp.helo('emailverifier.app')
-                  smtp.mail('verify@emailverifier.app')
+                  smtp.ehlo('gmail.com')  # Use a real domain
+                  mail_code, _ = smtp.mail('noreply@gmail.com')
+                  if mail_code != 250:
+                      print(f"  [DEBUG] Catch-all MAIL FROM failed: {mail_code}")
+                      smtp.quit()
+                      return False
                   code, _ = smtp.rcpt(random_email)
                   smtp.quit()
                   print(f"  [DEBUG] Catch-all test ({random_email}) -> code {code}")
@@ -249,8 +253,12 @@ jobs:
               try:
                   smtp = smtplib.SMTP(timeout=10)
                   smtp.connect(mx_host, 25)
-                  smtp.helo('emailverifier.app')
-                  smtp.mail('verify@emailverifier.app')
+                  smtp.ehlo('gmail.com')  # Use a real domain for EHLO
+                  # Use a realistic sender address
+                  mail_code, mail_msg = smtp.mail('noreply@gmail.com')
+                  if mail_code != 250:
+                      smtp.quit()
+                      return False, mail_code, f'MAIL failed: {mail_msg}'
                   code, msg = smtp.rcpt(email)
                   smtp.quit()
                   msg_str = msg.decode() if isinstance(msg, bytes) else str(msg)
