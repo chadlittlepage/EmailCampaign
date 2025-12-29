@@ -476,7 +476,7 @@ jobs:
           PYTHON_SCRIPT
 
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: verified-emails
           path: verified_emails.csv
